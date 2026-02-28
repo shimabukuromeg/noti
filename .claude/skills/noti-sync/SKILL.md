@@ -13,7 +13,7 @@ description: |
 ## Prerequisites
 
 - `noti` binary installed (`go install github.com/shimabukuromeg/noti/cmd/noti@latest`)
-- Authenticated via `noti login` (token at `~/.config/noti/token.json`) or `NOTION_TOKEN` env var
+- Authenticated via `noti login --client-id <ID> --client-secret <SECRET>` (OAuth, token saved to `~/.config/noti/token.json`) or `NOTION_TOKEN` env var (direct API token)
 - `NOTI_DATABASE_ID` env var set to the target Notion database
 
 Verify setup: `noti list --limit 1`
