@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -336,15 +337,17 @@ func TestRetrieveMarkdown(t *testing.T) {
 }
 
 func TestReplaceMarkdown(t *testing.T) {
-	// ReplaceMarkdown first GETs current content, then PATCHes with replace_content_range
-	currentMarkdown := `{
-		"object": "page_markdown",
-		"id": "page-replace-1",
-		"markdown": "# Old Title\n\nOld body content.",
-		"truncated": false,
-		"unknown_block_ids": []
+	// ReplaceMarkdown: GET children → DELETE each block → PATCH insert_content
+	blockChildren := `{
+		"object": "list",
+		"results": [
+			{"object": "block", "id": "block-1"},
+			{"object": "block", "id": "block-2"}
+		],
+		"has_more": false,
+		"next_cursor": ""
 	}`
-	responseJSON := `{
+	insertResponse := `{
 		"object": "page_markdown",
 		"id": "page-replace-1",
 		"markdown": "# Replaced Content\n\nNew body here.",
@@ -352,25 +355,26 @@ func TestReplaceMarkdown(t *testing.T) {
 		"unknown_block_ids": []
 	}`
 
-	var gotMethod, gotPath string
-	var gotBody updateMarkdownRequest
-	requestCount := 0
+	var deletedIDs []string
+	var gotInsertBody updateMarkdownRequest
 	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodGet {
-			// First request: retrieve current markdown
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/children"):
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(currentMarkdown))
-			return
+			_, _ = w.Write([]byte(blockChildren))
+		case r.Method == http.MethodDelete:
+			// Record which block was deleted
+			parts := strings.Split(r.URL.Path, "/")
+			deletedIDs = append(deletedIDs, parts[len(parts)-1])
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPatch:
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &gotInsertBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(insertResponse))
 		}
-		// Second request: replace
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &gotBody)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(responseJSON))
 	})
 
 	md, err := client.ReplaceMarkdown(context.Background(), "page-replace-1", "# Replaced Content\n\nNew body here.")
@@ -378,33 +382,26 @@ func TestReplaceMarkdown(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if requestCount != 2 {
-		t.Errorf("expected 2 requests (GET + PATCH), got %d", requestCount)
+	// Both blocks should have been deleted
+	wantDeleted := []string{"block-1", "block-2"}
+	if len(deletedIDs) != len(wantDeleted) {
+		t.Fatalf("deleted block count = %d, want %d", len(deletedIDs), len(wantDeleted))
 	}
-	if gotMethod != http.MethodPatch {
-		t.Errorf("method = %q, want PATCH", gotMethod)
+	for i, id := range wantDeleted {
+		if deletedIDs[i] != id {
+			t.Errorf("deleted[%d] = %q, want %q", i, deletedIDs[i], id)
+		}
 	}
-	if gotPath != "/pages/page-replace-1/markdown" {
-		t.Errorf("path = %q, want /pages/page-replace-1/markdown", gotPath)
+
+	// Final call should be insert_content
+	if gotInsertBody.Type != "insert_content" {
+		t.Errorf("insert type = %q, want %q", gotInsertBody.Type, "insert_content")
 	}
-	if gotBody.Type != "replace_content_range" {
-		t.Errorf("type = %q, want %q", gotBody.Type, "replace_content_range")
+	if gotInsertBody.InsertContent == nil {
+		t.Fatal("expected insert_content in request body, got nil")
 	}
-	if gotBody.ReplaceContent == nil {
-		t.Fatal("expected replace_content_range in request body, got nil")
-	}
-	if gotBody.ReplaceContent.Content != "# Replaced Content\n\nNew body here." {
-		t.Errorf("content = %q, want %q", gotBody.ReplaceContent.Content, "# Replaced Content\n\nNew body here.")
-	}
-	wantRange := "# Old Title...Old body content."
-	if gotBody.ReplaceContent.ContentRange != wantRange {
-		t.Errorf("content_range = %q, want %q", gotBody.ReplaceContent.ContentRange, wantRange)
-	}
-	if !gotBody.ReplaceContent.AllowDeletingContent {
-		t.Error("allow_deleting_content = false, want true")
-	}
-	if gotBody.InsertContent != nil {
-		t.Error("insert_content should be nil for replace operation")
+	if gotInsertBody.InsertContent.Content != "# Replaced Content\n\nNew body here." {
+		t.Errorf("content = %q, want %q", gotInsertBody.InsertContent.Content, "# Replaced Content\n\nNew body here.")
 	}
 	if md.Markdown != "# Replaced Content\n\nNew body here." {
 		t.Errorf("md.Markdown = %q, want %q", md.Markdown, "# Replaced Content\n\nNew body here.")
@@ -451,9 +448,6 @@ func TestInsertMarkdown(t *testing.T) {
 	}
 	if gotBody.InsertContent.Content != "## Appended Section" {
 		t.Errorf("content = %q, want %q", gotBody.InsertContent.Content, "## Appended Section")
-	}
-	if gotBody.ReplaceContent != nil {
-		t.Error("replace_content_range should be nil for insert operation")
 	}
 	if md.ID != "page-insert-1" {
 		t.Errorf("md.ID = %q, want %q", md.ID, "page-insert-1")

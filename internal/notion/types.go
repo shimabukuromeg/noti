@@ -182,9 +182,8 @@ type updatePageRequest struct {
 
 // updateMarkdownRequest is the request body for PATCH /v1/pages/{id}/markdown.
 type updateMarkdownRequest struct {
-	Type           string          `json:"type"`
-	InsertContent  *insertContent  `json:"insert_content,omitempty"`
-	ReplaceContent *replaceContent `json:"replace_content_range,omitempty"`
+	Type          string         `json:"type"`
+	InsertContent *insertContent `json:"insert_content,omitempty"`
 }
 
 type insertContent struct {
@@ -192,10 +191,18 @@ type insertContent struct {
 	After   string `json:"after,omitempty"`
 }
 
-type replaceContent struct {
-	Content              string `json:"content"`
-	ContentRange         string `json:"content_range"`
-	AllowDeletingContent bool   `json:"allow_deleting_content,omitempty"`
+// Block represents a minimal Notion block object (used for enumeration/deletion).
+type Block struct {
+	Object string `json:"object"`
+	ID     string `json:"id"`
+}
+
+// BlockChildrenResult is the response from GET /v1/blocks/{id}/children.
+type BlockChildrenResult struct {
+	Object     string  `json:"object"`
+	Results    []Block `json:"results"`
+	HasMore    bool    `json:"has_more"`
+	NextCursor string  `json:"next_cursor"`
 }
 
 // queryDatabaseRequest is the request body for POST /v1/databases/{id}/query.
